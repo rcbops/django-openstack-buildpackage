@@ -1,12 +1,6 @@
-django-openstack (2011.3-d5-rcb3~natty) natty; urgency=low
+django-openstack (2011.3-d5-rcb3) natty; urgency=low
 
   * fix problem with previous patch not being installed for authtoken to glance client
-
- -- RCB Builder <rcb-deploy@lists.rackspace.com>  Mon, 10 Oct 2011 17:46:19 -0500
-
-django-openstack (2011.3-d5-rcb2~natty) natty; urgency=low
-
-  * bump version
 
  -- RCB Builder <rcb-deploy@lists.rackspace.com>  Mon, 10 Oct 2011 17:46:19 -0500
 
