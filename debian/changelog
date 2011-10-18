@@ -1,0 +1,34 @@
+django-openstack (2011.3-d5-rcb3~natty) natty; urgency=low
+
+  * fix problem with previous patch not being installed for authtoken to glance client
+
+ -- RCB Builder <rcb-deploy@lists.rackspace.com>  Mon, 10 Oct 2011 17:46:19 -0500
+
+django-openstack (2011.3-d5-rcb2~natty) natty; urgency=low
+
+  * bump version
+
+ -- RCB Builder <rcb-deploy@lists.rackspace.com>  Mon, 10 Oct 2011 17:46:19 -0500
+
+django-openstack (2011.3-d5-rcb2) maverick; urgency=low
+
+  * Added patch to provide authtoken to glance client
+
+ -- RCB Builder <rcbdeploy@lists.rackspace.com>  Tue, 27 Sep 2011 23:25:13 -0500
+
+django-openstack (2011.3-d5-rcb1) natty; urgency=low
+
+  * Updated upstream source from
+    https://github.com/cloudbuilders/openstack-dashboard.git, revision
+    76429135c9e2e67f020b5819c4104323abd4b788 Updated debian packaging
+    from https://github.com/rpedde/debians.git, revision
+    7bda39c57a3116b87ba1f56470537b06c3912ff5
+
+ -- root <build@syn-n04.lab>  Tue, 13 Sep 2011 23:40:49 -0500
+
+django-openstack (000-000-0000) maverick; urgency=low
+
+  * Initial Commit
+
+ -- root <root@packaging>  Tue, 19 Jul 2011 22:21:31 +0000
+
