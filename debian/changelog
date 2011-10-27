@@ -1,3 +1,9 @@
+django-openstack (2011.3-d5-rcb4) natty; urgency=low
+
+  * Add XCBS-RCB-Component field in preparation for new essex-e0 drops
+
+ -- RCB Builder <rcb-deploy@lists.rackspace.com>  Thu, 27 Oct 2011 16:38:10 -0500
+
 django-openstack (2011.3-d5-rcb3) natty; urgency=low
 
   * fix problem with previous patch not being installed for authtoken to glance client
