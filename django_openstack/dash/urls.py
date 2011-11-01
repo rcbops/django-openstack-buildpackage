@@ -4,7 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
-# Copyright 2011 Fourth Paradigm Development, Inc.
+# Copyright 2011 Nebula, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -28,11 +28,14 @@ SNAPSHOTS = r'^(?P<tenant_id>[^/]+)/snapshots/(?P<instance_id>[^/]+)/%s$'
 CONTAINERS = r'^(?P<tenant_id>[^/]+)/containers/%s$'
 FLOATING_IPS = r'^(?P<tenant_id>[^/]+)/floating_ips/(?P<ip_id>[^/]+)/%s$'
 OBJECTS = r'^(?P<tenant_id>[^/]+)/containers/(?P<container_name>[^/]+)/%s$'
+NETWORKS = r'^(?P<tenant_id>[^/]+)/networks/%s$'
+PORTS = r'^(?P<tenant_id>[^/]+)/networks/(?P<network_id>[^/]+)/ports/%s$'
 
 urlpatterns = patterns('django_openstack.dash.views.instances',
     url(r'^(?P<tenant_id>[^/]+)/$', 'usage', name='dash_usage'),
     url(r'^(?P<tenant_id>[^/]+)/instances/$', 'index', name='dash_instances'),
-    url(r'^(?P<tenant_id>[^/]+)/instances/refresh$', 'refresh', name='dash_instances_refresh'),
+    url(r'^(?P<tenant_id>[^/]+)/instances/refresh$', 'refresh',
+        name='dash_instances_refresh'),
     url(INSTANCES % 'console', 'console', name='dash_instances_console'),
     url(INSTANCES % 'vnc', 'vnc', name='dash_instances_vnc'),
     url(INSTANCES % 'update', 'update', name='dash_instances_update'),
@@ -47,22 +50,24 @@ urlpatterns += patterns('django_openstack.dash.views.security_groups',
 urlpatterns += patterns('django_openstack.dash.views.images',
     url(r'^(?P<tenant_id>[^/]+)/images/$', 'index', name='dash_images'),
     url(IMAGES % 'launch', 'launch', name='dash_images_launch'),
+    url(IMAGES % 'update', 'update', name='dash_images_update'),
 )
 
 urlpatterns += patterns('django_openstack.dash.views.keypairs',
     url(r'^(?P<tenant_id>[^/]+)/keypairs/$', 'index', name='dash_keypairs'),
     url(KEYPAIRS % 'create', 'create', name='dash_keypairs_create'),
-)
-
-urlpatterns += patterns('django_openstack.dash.views.snapshots',
-    url(r'^(?P<tenant_id>[^/]+)/snapshots/$', 'index', name='dash_snapshots'),
-    url(SNAPSHOTS % 'create', 'create', name='dash_snapshots_create'),
+    url(KEYPAIRS % 'import', 'import_keypair', name='dash_keypairs_import'),
 )
 
 urlpatterns += patterns('django_openstack.dash.views.floating_ips',
     url(r'^(?P<tenant_id>[^/]+)/floating_ips/$', 'index', name='dash_floating_ips'),
     url(FLOATING_IPS % 'associate', 'associate', name='dash_floating_ips_associate'),
     url(FLOATING_IPS % 'disassociate', 'disassociate', name='dash_floating_ips_disassociate'),
+)
+
+urlpatterns += patterns('django_openstack.dash.views.snapshots',
+    url(r'^(?P<tenant_id>[^/]+)/snapshots/$', 'index', name='dash_snapshots'),
+    url(SNAPSHOTS % 'create', 'create', name='dash_snapshots_create'),
 )
 
 # Swift containers and objects.
@@ -78,4 +83,19 @@ urlpatterns += patterns('django_openstack.dash.views.objects',
         'copy', name='dash_object_copy'),
     url(OBJECTS % '(?P<object_name>[^/]+)/download',
         'download', name='dash_objects_download'),
+)
+
+urlpatterns += patterns('django_openstack.dash.views.networks',
+    url(r'^(?P<tenant_id>[^/]+)/networks/$', 'index', name='dash_networks'),
+    url(NETWORKS % 'create', 'create', name='dash_network_create'),
+    url(NETWORKS % '(?P<network_id>[^/]+)/detail', 'detail',
+        name='dash_networks_detail'),
+    url(NETWORKS % '(?P<network_id>[^/]+)/rename', 'rename',
+        name='dash_network_rename'),
+)
+
+urlpatterns += patterns('django_openstack.dash.views.ports',
+    url(PORTS % 'create', 'create', name='dash_ports_create'),
+    url(PORTS % '(?P<port_id>[^/]+)/attach', 'attach',
+        name='dash_ports_attach'),
 )

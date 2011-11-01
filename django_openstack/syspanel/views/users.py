@@ -4,7 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
-# Copyright 2011 Fourth Paradigm Development, Inc.
+# Copyright 2011 Nebula, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -47,11 +47,32 @@ class UserForm(forms.Form):
     def __init__(self, *args, **kwargs):
         tenant_list = kwargs.pop('tenant_list', None)
         super(UserForm, self).__init__(*args, **kwargs)
-        self.fields['tenant_id'].choices = [[tenant.id,tenant.id] for tenant in tenant_list]
+        self.fields['tenant_id'].choices = [[tenant.id, tenant.id]
+                for tenant in tenant_list]
 
-    id = forms.CharField(label="ID (username)")
+    name = forms.CharField(label="Name")
     email = forms.CharField(label="Email")
-    password = forms.CharField(label="Password", widget=forms.PasswordInput(render_value=False), required=False)
+    password = forms.CharField(label="Password",
+                               widget=forms.PasswordInput(render_value=False),
+                               required=False)
+    tenant_id = forms.ChoiceField(label="Primary Tenant")
+
+
+class UserUpdateForm(forms.Form):
+    def __init__(self, *args, **kwargs):
+        tenant_list = kwargs.pop('tenant_list', None)
+        super(UserUpdateForm, self).__init__(*args, **kwargs)
+        self.fields['tenant_id'].choices = [[tenant.id, tenant.id]
+                for tenant in tenant_list]
+
+    id = forms.CharField(label="ID",
+            widget=forms.TextInput(attrs={'readonly': 'readonly'}))
+    # FIXME: keystone doesn't return the username from a get API call.
+    #name = forms.CharField(label="Name")
+    email = forms.CharField(label="Email")
+    password = forms.CharField(label="Password",
+                               widget=forms.PasswordInput(render_value=False),
+                               required=False)
     tenant_id = forms.ChoiceField(label="Primary Tenant")
 
 
@@ -64,7 +85,6 @@ class UserDeleteForm(forms.SelfHandlingForm):
         api.user_delete(request, user_id)
         messages.info(request, '%s was successfully deleted.'
                                 % user_id)
-            
         return redirect(request.build_absolute_uri())
 
 
@@ -108,8 +128,8 @@ def index(request):
 
     user_delete_form = UserDeleteForm()
     user_enable_disable_form = UserEnableDisableForm()
-    
-    return shortcuts.render_to_response('syspanel_users.html', {
+
+    return shortcuts.render_to_response('django_openstack/syspanel/users/index.html', {
         'users': users,
         'user_delete_form': user_delete_form,
         'user_enable_disable_form': user_enable_disable_form,
@@ -121,7 +141,7 @@ def index(request):
 def update(request, user_id):
     if request.method == "POST":
         tenants = api.tenant_list(request)
-        form = UserForm(request.POST, tenant_list=tenants)
+        form = UserUpdateForm(request.POST, tenant_list=tenants)
         if form.is_valid():
             user = form.clean()
             updated = []
@@ -144,33 +164,23 @@ def update(request, user_id):
                                     please try again.')
 
             return render_to_response(
-            'syspanel_user_update.html',{
+            'django_openstack/syspanel/users/update.html', {
                 'form': form,
                 'user_id': user_id,
-            }, context_instance = template.RequestContext(request))
+            }, context_instance=template.RequestContext(request))
 
     else:
         u = api.user_get(request, user_id)
         tenants = api.tenant_list(request)
-        try:
-            # FIXME
-            email = u.email
-        except:
-            email = ''
-
-        try:
-            tenant_id = u.tenantId
-        except:
-            tenant_id = None
-        form = UserForm(initial={'id': user_id,
-                                 'tenant_id': tenant_id,
-                                 'email': email},
-                                 tenant_list=tenants)
+        form = UserUpdateForm(tenant_list=tenants,
+                              initial={'id': user_id,
+                                       'tenant_id': getattr(u, 'tenantId', None),
+                                       'email': getattr(u, 'email', '')})
         return render_to_response(
-        'syspanel_user_update.html',{
+        'django_openstack/syspanel/users/update.html', {
             'form': form,
             'user_id': user_id,
-        }, context_instance = template.RequestContext(request))
+        }, context_instance=template.RequestContext(request))
 
 
 @login_required
@@ -189,40 +199,45 @@ def create(request):
             user = form.clean()
             # TODO Make this a real request
             try:
-                LOG.info('Creating user with id "%s"' % user['id'])
-                api.user_create(request,
-                                user['id'],
-                                user['email'],
-                                user['password'],
-                                user['tenant_id'],
-                                True)
-                api.account_api(request).role_refs.add_for_tenant_user(
-                        user['tenant_id'], user['id'],
-                        settings.OPENSTACK_KEYSTONE_DEFAULT_ROLE)
-
+                LOG.info('Creating user with name "%s"' % user['name'])
+                new_user = api.user_create(request,
+                                           user['name'],
+                                           user['email'],
+                                           user['password'],
+                                           user['tenant_id'],
+                                           True)
                 messages.success(request,
-                                 '%s was successfully created.'
-                                 % user['id'])
+                                 'User "%s" was successfully created.'
+                                 % user['name'])
+                try:
+                    api.role_add_for_tenant_user(
+                        request, user['tenant_id'], new_user.id,
+                        settings.OPENSTACK_KEYSTONE_DEFAULT_ROLE)
+                except api_exceptions.ApiException, e:
+                    LOG.exception('ApiException while assigning\
+                                   role to new user: %s' % new_user.id)
+                    messages.error(request, 'Error assigning role to user: %s'
+                                             % e.message)
+
                 return redirect('syspanel_users')
 
             except api_exceptions.ApiException, e:
-                LOG.error('ApiException while creating user\n'
-                          'id: "%s", email: "%s", tenant_id: "%s"' %
-                          (user['id'], user['email'], user['tenant_id']),
-                          exc_info=True)
+                LOG.exception('ApiException while creating user\n'
+                          'name: "%s", email: "%s", tenant_id: "%s"' %
+                          (user['name'], user['email'], user['tenant_id']))
                 messages.error(request,
                                  'Error creating user: %s'
                                  % e.message)
                 return redirect('syspanel_users')
         else:
             return render_to_response(
-            'syspanel_user_create.html',{
+            'django_openstack/syspanel/users/create.html', {
                 'form': form,
-            }, context_instance = template.RequestContext(request))
+            }, context_instance=template.RequestContext(request))
 
     else:
         form = UserForm(tenant_list=tenants)
         return render_to_response(
-        'syspanel_user_create.html',{
+        'django_openstack/syspanel/users/create.html', {
             'form': form,
-        }, context_instance = template.RequestContext(request))
+        }, context_instance=template.RequestContext(request))

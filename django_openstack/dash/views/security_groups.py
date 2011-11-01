@@ -4,7 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
-# Copyright 2011 Fourth Paradigm Development, Inc.
+# Copyright 2011 Nebula, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -35,7 +35,7 @@ from django.utils.translation import ugettext as _
 
 from django_openstack import api
 from django_openstack import forms
-import openstackx.api.exceptions as api_exceptions
+from novaclient import exceptions as novaclient_exceptions
 
 
 LOG = logging.getLogger('django_openstack.dash.views.security_groups')
@@ -45,6 +45,7 @@ class CreateGroup(forms.SelfHandlingForm):
     name = forms.CharField(validators=[validators.validate_slug])
     description = forms.CharField()
     tenant_id = forms.CharField(widget=forms.HiddenInput())
+
     def handle(self, request, data):
         try:
             LOG.info('Add security_group: "%s"' % data)
@@ -54,34 +55,42 @@ class CreateGroup(forms.SelfHandlingForm):
                                                        data['description'])
             messages.info(request, 'Successfully created security_group: %s' \
                                     % data['name'])
-        except api_exceptions.ApiException, e:
-            LOG.error("ApiException in CreateGroup", exc_info=True)
-            messages.error(request, 'Error creating security group: %s' % e.message)
-        return shortcuts.redirect('dash_security_groups', data['tenant_id'])
+            return shortcuts.redirect('dash_security_groups',
+                                       data['tenant_id'])
+        except novaclient_exceptions.ClientException, e:
+            LOG.exception("ClientException in CreateGroup")
+            messages.error(request, 'Error creating security group: %s' %
+                                     e.message)
 
 
 class DeleteGroup(forms.SelfHandlingForm):
     tenant_id = forms.CharField(widget=forms.HiddenInput())
     security_group_id = forms.CharField(widget=forms.HiddenInput())
+
     def handle(self, request, data):
         try:
             LOG.info('Delete security_group: "%s"' % data)
 
-            security_group = api.security_group_delete(request, data['security_group_id'])
+            security_group = api.security_group_delete(request,
+                                                     data['security_group_id'])
             messages.info(request, 'Successfully deleted security_group: %s' \
                                     % data['security_group_id'])
-        except api_exceptions.ApiException, e:
-            LOG.error("ApiException in DeleteGroup", exc_info=True)
-            messages.error(request, 'Error deleting security group: %s' % e.message)
+        except novaclient_exceptions.ClientException, e:
+            LOG.exception("ClientException in DeleteGroup")
+            messages.error(request, 'Error deleting security group: %s'
+                                     % e.message)
         return shortcuts.redirect('dash_security_groups', data['tenant_id'])
 
 
 class AddRule(forms.SelfHandlingForm):
-    ip_protocol = forms.ChoiceField(choices=[('tcp', 'tcp'), ('udp', 'udp'), ('icmp', 'icmp')])
+    ip_protocol = forms.ChoiceField(choices=[('tcp', 'tcp'),
+                                             ('udp', 'udp'),
+                                             ('icmp', 'icmp')])
     from_port = forms.CharField()
     to_port = forms.CharField()
     cidr = forms.CharField()
-#    group_id = forms.CharField()
+    # TODO (anthony) source group support
+    # group_id = forms.CharField()
 
     security_group_id = forms.CharField(widget=forms.HiddenInput())
     tenant_id = forms.CharField(widget=forms.HiddenInput())
@@ -91,24 +100,25 @@ class AddRule(forms.SelfHandlingForm):
         try:
             LOG.info('Add security_group_rule: "%s"' % data)
 
-            security_group = api.security_group_rule_create(request,
-                                                     data['security_group_id'],
-                                                     data['ip_protocol'],
-                                                     data['from_port'],
-                                                     data['to_port'],
-                                                     data['cidr'])
+            rule = api.security_group_rule_create(request,
+                                                  data['security_group_id'],
+                                                  data['ip_protocol'],
+                                                  data['from_port'],
+                                                  data['to_port'],
+                                                  data['cidr'])
             messages.info(request, 'Successfully added rule: %s' \
-                                    % security_group.id)
-        except api_exceptions.ApiException, e:
-            LOG.error("ApiException in AddRule", exc_info=True)
-            messages.error(request, 'Error adding rule security group: %s' % e.message)
+                                    % rule.id)
+        except novaclient_exceptions.ClientException, e:
+            LOG.exception("ClientException in AddRule")
+            messages.error(request, 'Error adding rule security group: %s'
+                                     % e.message)
         return shortcuts.redirect(request.build_absolute_uri())
 
 
 class DeleteRule(forms.SelfHandlingForm):
     security_group_rule_id = forms.CharField(widget=forms.HiddenInput())
-    security_group_id = forms.CharField(widget=forms.HiddenInput())
     tenant_id = forms.CharField(widget=forms.HiddenInput())
+
     def handle(self, request, data):
         security_group_rule_id = data['security_group_rule_id']
         tenant_id = data['tenant_id']
@@ -120,28 +130,31 @@ class DeleteRule(forms.SelfHandlingForm):
                                                 security_group_rule_id)
             messages.info(request, 'Successfully deleted rule: %s' \
                                     % security_group_rule_id)
-        except api_exceptions.ApiException, e:
-            LOG.error("ApiException in DeleteRule", exc_info=True)
-            messages.error(request, 'Error authorizing security group: %s' % e.message)
+        except novaclient_exceptions.ClientException, e:
+            LOG.exception("ClientException in DeleteRule")
+            messages.error(request, 'Error authorizing security group: %s'
+                                     % e.message)
         return shortcuts.redirect(request.build_absolute_uri())
 
 
 @login_required
 def index(request, tenant_id):
     delete_form, handled = DeleteGroup.maybe_handle(request,
-                                initial={ 'tenant_id': tenant_id })
+                                initial={'tenant_id': tenant_id})
 
     if handled:
         return handled
 
     try:
         security_groups = api.security_group_list(request)
-    except api_exceptions.ApiException, e:
+    except novaclient_exceptions.ClientException, e:
         security_groups = []
-        LOG.error("ApiException in security_groups index", exc_info=True)
-        messages.error(request, 'Error fetching security_groups: %s' % e.message)
+        LOG.exception("ClientException in security_groups index")
+        messages.error(request, 'Error fetching security_groups: %s'
+                                 % e.message)
 
-    return shortcuts.render_to_response('dash_security_groups.html', {
+    return shortcuts.render_to_response(
+    'django_openstack/dash/security_groups/index.html', {
         'security_groups': security_groups,
         'delete_form': delete_form,
     }, context_instance=template.RequestContext(request))
@@ -150,25 +163,26 @@ def index(request, tenant_id):
 @login_required
 def edit_rules(request, tenant_id, security_group_id):
     add_form, handled = AddRule.maybe_handle(request,
-                              initial={ 'tenant_id': tenant_id,
-                                        'security_group_id': security_group_id })
+                           initial={'tenant_id': tenant_id,
+                                      'security_group_id': security_group_id})
     if handled:
         return handled
 
     delete_form, handled = DeleteRule.maybe_handle(request,
-                              initial={ 'tenant_id': tenant_id,
-                                        'security_group_id': security_group_id })
+                              initial={'tenant_id': tenant_id,
+                                       'security_group_id': security_group_id})
     if handled:
         return handled
 
     try:
         security_group = api.security_group_get(request, security_group_id)
-    except api_exceptions.ApiException, e:
-        LOG.error("ApiException in security_groups rules edit", exc_info=True)
-        messages.error(request, 'Error fetching security_group: %s' % e.message)
+    except novaclient_exceptions.ClientException, e:
+        LOG.exception("ClientException in security_groups rules edit")
+        messages.error(request, 'Error getting security_group: %s' % e.message)
         return shortcuts.redirect('dash_security_groups', tenant_id)
 
-    return shortcuts.render_to_response('dash_security_groups_edit_rules.html', {
+    return shortcuts.render_to_response(
+        'django_openstack/dash/security_groups/edit_rules.html', {
         'security_group': security_group,
         'delete_form': delete_form,
         'form': add_form,
@@ -178,10 +192,11 @@ def edit_rules(request, tenant_id, security_group_id):
 @login_required
 def create(request, tenant_id):
     form, handled = CreateGroup.maybe_handle(request,
-                                initial={ 'tenant_id': tenant_id })
+                                initial={'tenant_id': tenant_id})
     if handled:
         return handled
 
-    return shortcuts.render_to_response('dash_security_group_create.html', {
+    return shortcuts.render_to_response(
+    'django_openstack/dash/security_groups/create.html', {
         'form': form,
     }, context_instance=template.RequestContext(request))

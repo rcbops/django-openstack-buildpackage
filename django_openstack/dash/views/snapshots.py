@@ -4,7 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
-# Copyright 2011 Fourth Paradigm Development, Inc.
+# Copyright 2011 Nebula, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -46,13 +46,16 @@ LOG = logging.getLogger('django_openstack.dash.views.snapshots')
 
 class CreateSnapshot(forms.SelfHandlingForm):
     tenant_id = forms.CharField(widget=forms.HiddenInput())
-    instance_id = forms.CharField(widget=forms.TextInput(attrs={'readonly':'readonly'}))
+    instance_id = forms.CharField(widget=forms.TextInput(
+        attrs={'readonly': 'readonly'}))
     name = forms.CharField(max_length="20", label="Snapshot Name")
 
     def handle(self, request, data):
         try:
             LOG.info('Creating snapshot "%s"' % data['name'])
-            snapshot = api.snapshot_create(request, data['instance_id'], data['name'])
+            snapshot = api.snapshot_create(request,
+                    data['instance_id'],
+                    data['name'])
             instance = api.server_get(request, data['instance_id'])
 
             messages.info(request, 'Snapshot "%s" created for instance "%s"' %\
@@ -60,7 +63,7 @@ class CreateSnapshot(forms.SelfHandlingForm):
             return shortcuts.redirect('dash_snapshots', data['tenant_id'])
         except api_exceptions.ApiException, e:
             msg = 'Error Creating Snapshot: %s' % e.message
-            LOG.error(msg, exc_info=True)
+            LOG.exception(msg)
             messages.error(request, msg)
             return shortcuts.redirect(request.build_absolute_uri())
 
@@ -73,14 +76,15 @@ def index(request, tenant_id):
         images = api.snapshot_list_detailed(request)
     except glance_exception.ClientConnectionError, e:
         msg = 'Error connecting to glance: %s' % str(e)
-        LOG.error(msg, exc_info=True)
+        LOG.exception(msg)
         messages.error(request, msg)
     except glance_exception.Error, e:
         msg = 'Error retrieving image list: %s' % str(e)
-        LOG.error(msg, exc_info=True)
+        LOG.exception(msg)
         messages.error(request, msg)
 
-    return render_to_response('dash_snapshots.html', {
+    return render_to_response(
+    'django_openstack/dash/snapshots/index.html', {
         'images': images,
     }, context_instance=template.RequestContext(request))
 
@@ -97,7 +101,7 @@ def create(request, tenant_id, instance_id):
         instance = api.server_get(request, instance_id)
     except api_exceptions.ApiException, e:
         msg = "Unable to retreive instance: %s" % str(e)
-        LOG.error(msg)
+        LOG.exception(msg)
         messages.error(request, msg)
         return shortcuts.redirect('dash_instances', tenant_id)
 
@@ -108,7 +112,8 @@ def create(request, tenant_id, instance_id):
                                   ', '.join(valid_states))
         return shortcuts.redirect('dash_instances', tenant_id)
 
-    return shortcuts.render_to_response('dash_snapshots_create.html', {
+    return shortcuts.render_to_response(
+    'django_openstack/dash/snapshots/create.html', {
         'instance': instance,
         'create_form': form,
     }, context_instance=template.RequestContext(request))

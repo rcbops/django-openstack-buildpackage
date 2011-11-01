@@ -4,7 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
-# Copyright 2011 Fourth Paradigm Development, Inc.
+# Copyright 2011 Nebula, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -62,8 +62,8 @@ class ToggleService(forms.SelfHandlingForm):
                 messages.info(request, "Service '%s' has been disabled"
                                         % data['name'])
         except api_exceptions.ApiException, e:
-            LOG.error('ApiException while toggling service %s' %
-                      data['service'], exc_info=True)
+            LOG.exception('ApiException while toggling service %s' %
+                      data['service'])
             messages.error(request, "Unable to update service '%s': %s"
                                      % data['name'], e.message)
 
@@ -82,25 +82,25 @@ def index(request):
     try:
         services = api.service_list(request)
     except api_exceptions.ApiException, e:
-        LOG.error('ApiException fetching service list', exc_info=True)
+        LOG.exception('ApiException fetching service list')
         messages.error(request, 'Unable to get service info: %s' % e.message)
 
     other_services = []
 
-    for k, v in request.session['serviceCatalog'].iteritems():
-        v = v[0]
+    for service in request.session['serviceCatalog']:
+        url = service['endpoints'][0]['internalURL']
         try:
             # TODO(mgius): This silences curl, but there's probably
             # a better solution than using curl to begin with
-            subprocess.check_call(['curl', '-m', '1', v['internalURL']],
+            subprocess.check_call(['curl', '-m', '1', url],
                                   stdout=open(os.devnull, 'w'),
                                   stderr=open(os.devnull, 'w'))
             up = True
         except:
             up = False
-        hostname = urlparse.urlparse(v['internalURL']).hostname
-        row = {'type': k, 'internalURL': v['internalURL'], 'host': hostname,
-               'region': v['region'], 'up': up }
+        hostname = urlparse.urlparse(url).hostname
+        row = {'type': service['type'], 'internalURL': url, 'host': hostname,
+               'region': service['endpoints'][0]['region'], 'up': up}
         other_services.append(row)
 
     services = sorted(services, key=lambda svc: (svc.type +
@@ -108,8 +108,9 @@ def index(request):
     other_services = sorted(other_services, key=lambda svc: (svc['type'] +
                                                              svc['host']))
 
-    return render_to_response('syspanel_services.html', {
+    return render_to_response(
+    'django_openstack/syspanel/services/index.html', {
         'services': services,
         'service_toggle_enabled_form': ToggleService,
         'other_services': other_services,
-    }, context_instance = template.RequestContext(request))
+    }, context_instance=template.RequestContext(request))

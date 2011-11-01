@@ -4,7 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
-# Copyright 2011 Fourth Paradigm Development, Inc.
+# Copyright 2011 Nebula, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -28,6 +28,7 @@ from django.conf import settings
 from django_openstack import api
 from glance import client as glance_client
 from mox import IsA
+from novaclient.v1_1 import client
 from openstack import compute as OSCompute
 from openstackx import admin as OSAdmin
 from openstackx import auth as OSAuth
@@ -47,6 +48,7 @@ TEST_PORT = 8000
 TEST_RETURN = 'retValue'
 TEST_TENANT_DESCRIPTION = 'tenantDescription'
 TEST_TENANT_ID = '1234'
+TEST_TENANT_NAME = 'foo'
 TEST_TOKEN = 'aToken'
 TEST_TOKEN_ID = 'userId'
 TEST_URL = 'http://%s:%s/something/v1.0' % (TEST_HOSTNAME, TEST_PORT)
@@ -57,7 +59,7 @@ class Server(object):
     """ More or less fakes what the api is looking for """
     def __init__(self, id, image, attrs=None):
         self.id = id
-        
+
         self.image = image
         if attrs is not None:
             self.attrs = attrs
@@ -97,13 +99,13 @@ class Token(object):
     """ More or less fakes what the api is looking for """
     def __init__(self, id, username, tenant_id, serviceCatalog=None):
         self.id = id
-        self.username = username
+        self.user = {'name': username}
         self.tenant_id = tenant_id
         self.serviceCatalog = serviceCatalog
 
     def __eq__(self, other):
         return self.id == other.id and \
-               self.username == other.username and \
+               self.user['name'] == other.user['name'] and \
                self.tenant_id == other.tenant_id and \
                self.serviceCatalog == other.serviceCatalog
 
@@ -136,6 +138,24 @@ class APIDict(api.APIDictWrapper):
             innerDict = {'foo': 'foo',
                          'bar': 'bar'}
         return APIDict(innerDict)
+
+
+class NovaClientTestMixin(object):
+    def setUp(self):
+        super(NovaClientTestMixin, self).setUp()
+        self._original_novaclient = api.novaclient
+        api.novaclient = lambda request: self.stub_novaclient()
+
+
+    def stub_novaclient(self):
+        if not hasattr(self, "novaclient"):
+            self.mox.StubOutWithMock(client, 'Client')
+            self.novaclient = self.mox.CreateMock(client.Client)
+        return self.novaclient
+
+    def tearDown(self):
+        super(NovaClientTestMixin, self).tearDown()
+        api.novaclient = self._original_novaclient
 
 
 class APIResourceWrapperTests(test.TestCase):
@@ -229,7 +249,7 @@ class ServerWrapperTests(test.TestCase):
     HOST = 'hostname'
     ID = '1'
     IMAGE_NAME = 'imageName'
-    IMAGE_OBJ = { 'id': '3', 'links': [{'href': '3', u'rel': u'bookmark'}] }
+    IMAGE_OBJ = {'id': '3', 'links': [{'href': '3', u'rel': u'bookmark'}]}
 
     def setUp(self):
         super(ServerWrapperTests, self).setUp()
@@ -290,123 +310,28 @@ class ApiHelperTests(test.TestCase):
         GLANCE_URL = 'http://glance/glanceapi/'
         NOVA_URL = 'http://nova/novapi/'
 
-        url = api.url_for(self.request, 'glance')
+        url = api.url_for(self.request, 'image')
         self.assertEqual(url, GLANCE_URL + 'internal')
 
-        url = api.url_for(self.request, 'glance', admin=False)
+        url = api.url_for(self.request, 'image', admin=False)
         self.assertEqual(url, GLANCE_URL + 'internal')
 
-        url = api.url_for(self.request, 'glance', admin=True)
+        url = api.url_for(self.request, 'image', admin=True)
         self.assertEqual(url, GLANCE_URL + 'admin')
 
-        url = api.url_for(self.request, 'nova')
+        url = api.url_for(self.request, 'compute')
         self.assertEqual(url, NOVA_URL + 'internal')
 
-        url = api.url_for(self.request, 'nova', admin=False)
+        url = api.url_for(self.request, 'compute', admin=False)
         self.assertEqual(url, NOVA_URL + 'internal')
 
-        url = api.url_for(self.request, 'nova', admin=True)
+        url = api.url_for(self.request, 'compute', admin=True)
         self.assertEqual(url, NOVA_URL + 'admin')
 
         self.assertNotIn('notAnApi', self.request.user.service_catalog,
                          'Select a new nonexistent service catalog key')
         with self.assertRaises(api.ServiceCatalogException):
             url = api.url_for(self.request, 'notAnApi')
-
-    def test_token_info(self):
-        """ This function uses the keystone api, but not through an
-            api client, because there doesn't appear to be one for
-            keystone
-        """
-        GLANCE_URL = 'http://glance/glance_api/'
-        KEYSTONE_HOST = 'keystonehost'
-        KEYSTONE_PORT = 8080
-        KEYSTONE_URL = 'http://%s:%d/keystone/' % (KEYSTONE_HOST,
-                                                   KEYSTONE_PORT)
-
-        serviceCatalog = {
-                'glance': [{'adminURL': GLANCE_URL + 'admin',
-                            'internalURL': GLANCE_URL + 'internal'},
-                          ],
-                'identity': [{'adminURL': KEYSTONE_URL + 'admin',
-                          'internalURL': KEYSTONE_URL + 'internal'},
-                        ],
-                }
-
-        token = Token(TEST_TOKEN_ID, TEST_TENANT_ID,
-                      TEST_USERNAME, serviceCatalog)
-
-        jsonData = {
-                'auth': {
-                    'token': {
-                        'expires': '2011-07-02T02:01:19.382655',
-                        'id': '3c5748d5-bec6-4215-843a-f959d589f4b0',
-                        },
-                    'user': {
-                        'username': 'joeuser',
-                        'roleRefs': [{'roleId': 'Minion'}],
-                        'tenantId': u'1234'
-                        }
-                    }
-                }
-
-        jsonDataAdmin = {
-                'auth': {
-                    'token': {
-                        'expires': '2011-07-02T02:01:19.382655',
-                        'id': '3c5748d5-bec6-4215-843a-f959d589f4b0',
-                        },
-                    'user': {
-                        'username': 'joeuser',
-                        'roleRefs': [{'roleId': 'Admin'}],
-                        'tenantId': u'1234'
-                        }
-                    }
-                }
-
-        # setup test where user is not admin
-        self.mox.StubOutClassWithMocks(httplib, 'HTTPConnection')
-
-        conn = httplib.HTTPConnection(KEYSTONE_HOST, KEYSTONE_PORT)
-        response = self.mox.CreateMock(httplib.HTTPResponse)
-
-        conn.request(IsA(str), IsA(str), headers=IsA(dict))
-        conn.getresponse().AndReturn(response)
-
-        response.read().AndReturn(json.dumps(jsonData))
-
-        expected_nonadmin_val = {
-                'tenant': '1234',
-                'user': 'joeuser',
-                'admin': False
-                }
-
-        # setup test where user is admin
-        conn = httplib.HTTPConnection(KEYSTONE_HOST, KEYSTONE_PORT)
-        response = self.mox.CreateMock(httplib.HTTPResponse)
-
-        conn.request(IsA(str), IsA(str), headers=IsA(dict))
-        conn.getresponse().AndReturn(response)
-
-        response.read().AndReturn(json.dumps(jsonDataAdmin))
-
-        expected_admin_val = {
-                'tenant': '1234',
-                'user': 'joeuser',
-                'admin': True
-                }
-
-        self.mox.ReplayAll()
-
-        ret_val = api.token_info(None, token)
-
-        self.assertDictEqual(ret_val, expected_nonadmin_val)
-
-        ret_val = api.token_info(None, token)
-
-        self.assertDictEqual(ret_val, expected_admin_val)
-
-        self.mox.VerifyAll()
 
 
 class AccountApiTests(test.TestCase):
@@ -493,13 +418,13 @@ class AccountApiTests(test.TestCase):
         account_api = self.stub_account_api()
 
         account_api.tenants = self.mox.CreateMockAnything()
-        account_api.tenants.update(TEST_TENANT_ID, DESCRIPTION,
-                                   ENABLED).AndReturn(TEST_RETURN)
+        account_api.tenants.update(TEST_TENANT_ID, TEST_TENANT_NAME,
+                                   DESCRIPTION, ENABLED).AndReturn(TEST_RETURN)
 
         self.mox.ReplayAll()
 
-        ret_val = api.tenant_update(self.request, TEST_TENANT_ID,
-                                    DESCRIPTION, ENABLED)
+        ret_val = api.tenant_update(self.request, TEST_TENANT_ID, 
+                                    TEST_TENANT_NAME, DESCRIPTION, ENABLED)
 
         self.assertIsInstance(ret_val, api.Tenant)
         self.assertEqual(ret_val._apiresource, TEST_RETURN)
@@ -619,6 +544,30 @@ class AccountApiTests(test.TestCase):
         self.mox.VerifyAll()
 
 
+    def test_role_add_for_tenant_user(self):
+        account_api = self.stub_account_api()
+
+        role = api.Role(APIResource.get_instance())
+        role.id = TEST_RETURN
+        role.name = TEST_RETURN
+
+        account_api.role_refs = self.mox.CreateMockAnything()
+        account_api.role_refs.add_for_tenant_user(TEST_TENANT_ID,
+                                                  TEST_USERNAME,
+                                                  TEST_RETURN).AndReturn(role)
+        api._get_role = self.mox.CreateMockAnything()
+        api._get_role(IsA(http.HttpRequest), IsA(str)).AndReturn(role)
+
+        self.mox.ReplayAll()
+        ret_val = api.role_add_for_tenant_user(self.request,
+                                               TEST_TENANT_ID,
+                                               TEST_USERNAME,
+                                               TEST_RETURN)
+        self.assertEqual(ret_val, None)
+
+        self.mox.VerifyAll()
+
+
 class AdminApiTests(test.TestCase):
     def stub_admin_api(self, count=1):
         self.mox.StubOutWithMock(api, 'admin_api')
@@ -632,8 +581,8 @@ class AdminApiTests(test.TestCase):
         OSAdmin.Admin(auth_token=TEST_TOKEN, management_url=TEST_URL)
 
         self.mox.StubOutWithMock(api, 'url_for')
-        api.url_for(IsA(http.HttpRequest), 'nova', True).AndReturn(TEST_URL)
-        api.url_for(IsA(http.HttpRequest), 'nova', True).AndReturn(TEST_URL)
+        api.url_for(IsA(http.HttpRequest), 'compute', True).AndReturn(TEST_URL)
+        api.url_for(IsA(http.HttpRequest), 'compute', True).AndReturn(TEST_URL)
 
         self.mox.ReplayAll()
 
@@ -842,7 +791,7 @@ class AuthApiTests(test.TestCase):
         self.mox.VerifyAll()
 
 
-class ComputeApiTests(test.TestCase):
+class ComputeApiTests(NovaClientTestMixin, test.TestCase):
     def stub_compute_api(self, count=1):
         self.mox.StubOutWithMock(api, 'compute_api')
         compute_api = self.mox.CreateMock(OSCompute.Compute)
@@ -862,9 +811,9 @@ class ComputeApiTests(test.TestCase):
 
         self.mox.StubOutWithMock(api, 'url_for')
         # called three times?  Looks like a good place for optimization
-        api.url_for(IsA(http.HttpRequest), 'nova').AndReturn(TEST_URL)
-        api.url_for(IsA(http.HttpRequest), 'nova').AndReturn(TEST_URL)
-        api.url_for(IsA(http.HttpRequest), 'nova').AndReturn(TEST_URL)
+        api.url_for(IsA(http.HttpRequest), 'compute').AndReturn(TEST_URL)
+        api.url_for(IsA(http.HttpRequest), 'compute').AndReturn(TEST_URL)
+        api.url_for(IsA(http.HttpRequest), 'compute').AndReturn(TEST_URL)
 
         self.mox.ReplayAll()
 
@@ -879,10 +828,10 @@ class ComputeApiTests(test.TestCase):
     def test_flavor_get(self):
         FLAVOR_ID = 6
 
-        compute_api = self.stub_compute_api()
+        novaclient = self.stub_novaclient()
 
-        compute_api.flavors = self.mox.CreateMockAnything()
-        compute_api.flavors.get(FLAVOR_ID).AndReturn(TEST_RETURN)
+        novaclient.flavors = self.mox.CreateMockAnything()
+        novaclient.flavors.get(FLAVOR_ID).AndReturn(TEST_RETURN)
 
         self.mox.ReplayAll()
 
@@ -933,8 +882,34 @@ class ComputeApiTests(test.TestCase):
 
         self.mox.VerifyAll()
 
+    def test_server_create(self):
+        NAME = 'server'
+        IMAGE = 'anImage'
+        FLAVOR = 'cherry'
+        USER_DATA = {'nuts': 'berries'}
+        KEY = 'user'
+        SECGROUP = self.mox.CreateMock(api.SecurityGroup)
 
-class ExtrasApiTests(test.TestCase):
+        server = self.mox.CreateMock(OSCompute.Server)
+        novaclient = self.stub_novaclient()
+        novaclient.servers = self.mox.CreateMockAnything()
+        novaclient.servers.create(NAME, IMAGE, FLAVOR, userdata=USER_DATA,
+                                  security_groups=[SECGROUP], key_name=KEY)\
+                                  .AndReturn(TEST_RETURN)
+
+        self.mox.ReplayAll()
+
+        ret_val = api.server_create(self.request, NAME, IMAGE, FLAVOR,
+                                    KEY, USER_DATA, [SECGROUP])
+
+        self.assertIsInstance(ret_val, api.Server)
+        self.assertEqual(ret_val._apiresource, TEST_RETURN)
+
+        self.mox.VerifyAll()
+
+
+class ExtrasApiTests(NovaClientTestMixin, test.TestCase):
+
     def stub_extras_api(self, count=1):
         self.mox.StubOutWithMock(api, 'extras_api')
         extras_api = self.mox.CreateMock(OSExtras.Extras)
@@ -947,8 +922,8 @@ class ExtrasApiTests(test.TestCase):
         OSExtras.Extras(auth_token=TEST_TOKEN, management_url=TEST_URL)
 
         self.mox.StubOutWithMock(api, 'url_for')
-        api.url_for(IsA(http.HttpRequest), 'nova').AndReturn(TEST_URL)
-        api.url_for(IsA(http.HttpRequest), 'nova').AndReturn(TEST_URL)
+        api.url_for(IsA(http.HttpRequest), 'compute').AndReturn(TEST_URL)
+        api.url_for(IsA(http.HttpRequest), 'compute').AndReturn(TEST_URL)
 
         self.mox.ReplayAll()
 
@@ -980,9 +955,9 @@ class ExtrasApiTests(test.TestCase):
 
     def test_flavor_list(self):
         flavors = (TEST_RETURN, TEST_RETURN + '2')
-        extras_api = self.stub_extras_api()
-        extras_api.flavors = self.mox.CreateMockAnything()
-        extras_api.flavors.list().AndReturn(flavors)
+        novaclient = self.stub_novaclient()
+        novaclient.flavors = self.mox.CreateMockAnything()
+        novaclient.flavors.list().AndReturn(flavors)
 
         self.mox.ReplayAll()
 
@@ -992,76 +967,6 @@ class ExtrasApiTests(test.TestCase):
         for flavor in ret_val:
             self.assertIsInstance(flavor, api.Flavor)
             self.assertIn(flavor._apiresource, flavors)
-
-        self.mox.VerifyAll()
-
-    def test_keypair_create(self):
-        NAME = '1'
-
-        extras_api = self.stub_extras_api()
-        extras_api.keypairs = self.mox.CreateMockAnything()
-        extras_api.keypairs.create(NAME).AndReturn(TEST_RETURN)
-
-        self.mox.ReplayAll()
-
-        ret_val = api.keypair_create(self.request, NAME)
-        self.assertIsInstance(ret_val, api.KeyPair)
-        self.assertEqual(ret_val._apiresource, TEST_RETURN)
-
-        self.mox.VerifyAll()
-
-    def test_keypair_delete(self):
-        KEYPAIR_ID = '1'
-
-        extras_api = self.stub_extras_api()
-        extras_api.keypairs = self.mox.CreateMockAnything()
-        extras_api.keypairs.delete(KEYPAIR_ID).AndReturn(TEST_RETURN)
-
-        self.mox.ReplayAll()
-
-        ret_val = api.keypair_delete(self.request, KEYPAIR_ID)
-        self.assertIsNone(ret_val)
-
-        self.mox.VerifyAll()
-
-    def test_keypair_list(self):
-        NAME = 'keypair'
-        keypairs = (NAME + '1', NAME + '2')
-
-        extras_api = self.stub_extras_api()
-        extras_api.keypairs = self.mox.CreateMockAnything()
-        extras_api.keypairs.list().AndReturn(keypairs)
-
-        self.mox.ReplayAll()
-
-        ret_val = api.keypair_list(self.request)
-
-        self.assertEqual(len(ret_val), len(keypairs))
-        for keypair in ret_val:
-            self.assertIsInstance(keypair, api.KeyPair)
-            self.assertIn(keypair._apiresource, keypairs)
-
-        self.mox.VerifyAll()
-
-    def test_server_create(self):
-        NAME = 'server'
-        IMAGE = 'anImage'
-        FLAVOR = 'cherry'
-        USER_DATA = {'nuts': 'berries'}
-        KEY = 'user'
-
-        extras_api = self.stub_extras_api()
-        extras_api.servers = self.mox.CreateMockAnything()
-        extras_api.servers.create(NAME, IMAGE, FLAVOR, user_data=USER_DATA,
-                                  key_name=KEY).AndReturn(TEST_RETURN)
-
-        self.mox.ReplayAll()
-
-        ret_val = api.server_create(self.request, NAME, IMAGE, FLAVOR,
-                                    KEY, USER_DATA)
-
-        self.assertIsInstance(ret_val, api.Server)
-        self.assertEqual(ret_val._apiresource, TEST_RETURN)
 
         self.mox.VerifyAll()
 
@@ -1136,24 +1041,211 @@ class ExtrasApiTests(test.TestCase):
         self.mox.VerifyAll()
 
 
+class APIExtensionTests(NovaClientTestMixin, test.TestCase):
+
+    def setUp(self):
+        super(APIExtensionTests, self).setUp()
+        keypair = api.KeyPair(APIResource.get_instance())
+        keypair.id = 1
+        keypair.name = TEST_RETURN
+
+        self.keypair = keypair
+        self.keypairs = [keypair, ]
+
+        floating_ip = api.FloatingIp(APIResource.get_instance())
+        floating_ip.id = 1
+        floating_ip.fixed_ip = '10.0.0.4'
+        floating_ip.instance_id = 1
+        floating_ip.ip = '58.58.58.58'
+
+        self.floating_ip = floating_ip
+        self.floating_ips = [floating_ip, ]
+
+        server = api.Server(APIResource.get_instance(), self.request)
+        server.id = 1
+
+        self.server = server
+        self.servers = [server, ]
+
+    def test_server_snapshot_create(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.servers = self.mox.CreateMockAnything()
+        novaclient.servers.create_image(IsA(int), IsA(str)).\
+                                                        AndReturn(self.server)
+        self.mox.ReplayAll()
+
+        server = api.snapshot_create(self.request, 1, 'test-snapshot')
+
+        self.assertIsInstance(server, api.Server)
+        self.mox.VerifyAll()
+
+    def test_tenant_floating_ip_list(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.floating_ips = self.mox.CreateMockAnything()
+        novaclient.floating_ips.list().AndReturn(self.floating_ips)
+        self.mox.ReplayAll()
+
+        floating_ips = api.tenant_floating_ip_list(self.request)
+
+        self.assertEqual(len(floating_ips), len(self.floating_ips))
+        self.assertIsInstance(floating_ips[0], api.FloatingIp)
+        self.mox.VerifyAll()
+
+    def test_tenant_floating_ip_get(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.floating_ips = self.mox.CreateMockAnything()
+        novaclient.floating_ips.get(IsA(int)).AndReturn(self.floating_ip)
+        self.mox.ReplayAll()
+
+        floating_ip = api.tenant_floating_ip_get(self.request, 1)
+
+        self.assertIsInstance(floating_ip, api.FloatingIp)
+        self.mox.VerifyAll()
+
+    def test_tenant_floating_ip_allocate(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.floating_ips = self.mox.CreateMockAnything()
+        novaclient.floating_ips.create().AndReturn(self.floating_ip)
+        self.mox.ReplayAll()
+
+        floating_ip = api.tenant_floating_ip_allocate(self.request)
+
+        self.assertIsInstance(floating_ip, api.FloatingIp)
+        self.mox.VerifyAll()
+
+    def test_tenant_floating_ip_release(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.floating_ips = self.mox.CreateMockAnything()
+        novaclient.floating_ips.delete(1).AndReturn(self.floating_ip)
+        self.mox.ReplayAll()
+
+        floating_ip = api.tenant_floating_ip_release(self.request, 1)
+
+        self.assertIsInstance(floating_ip, api.FloatingIp)
+        self.mox.VerifyAll()
+
+    def test_server_remove_floating_ip(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.servers = self.mox.CreateMockAnything()
+        novaclient.floating_ips = self.mox.CreateMockAnything()
+
+        novaclient.servers.get(IsA(int)).AndReturn(self.server)
+        novaclient.floating_ips.get(IsA(int)).AndReturn(self.floating_ip)
+        novaclient.servers.remove_floating_ip(IsA(self.server.__class__),
+                                           IsA(self.floating_ip.__class__)) \
+                                           .AndReturn(self.server)
+        self.mox.ReplayAll()
+
+        server = api.server_remove_floating_ip(self.request, 1, 1)
+
+        self.assertIsInstance(server, api.Server)
+        self.mox.VerifyAll()
+
+    def test_server_add_floating_ip(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.floating_ips = self.mox.CreateMockAnything()
+        novaclient.servers = self.mox.CreateMockAnything()
+
+        novaclient.servers.get(IsA(int)).AndReturn(self.server)
+        novaclient.floating_ips.get(IsA(int)).AndReturn(self.floating_ip)
+        novaclient.servers.add_floating_ip(IsA(self.server.__class__),
+                                           IsA(self.floating_ip.__class__)) \
+                                           .AndReturn(self.server)
+        self.mox.ReplayAll()
+
+        server = api.server_add_floating_ip(self.request, 1, 1)
+
+        self.assertIsInstance(server, api.Server)
+        self.mox.VerifyAll()
+
+    def test_keypair_create(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.keypairs = self.mox.CreateMockAnything()
+        novaclient.keypairs.create(IsA(str)).AndReturn(self.keypair)
+        self.mox.ReplayAll()
+
+        ret_val = api.keypair_create(self.request, TEST_RETURN)
+        self.assertIsInstance(ret_val, api.KeyPair)
+        self.assertEqual(ret_val.name, self.keypair.name)
+
+        self.mox.VerifyAll()
+
+    def test_keypair_import(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.keypairs = self.mox.CreateMockAnything()
+        novaclient.keypairs.create(IsA(str), IsA(str)).AndReturn(self.keypair)
+        self.mox.ReplayAll()
+
+        ret_val = api.keypair_import(self.request, TEST_RETURN, TEST_RETURN)
+        self.assertIsInstance(ret_val, api.KeyPair)
+        self.assertEqual(ret_val.name, self.keypair.name)
+
+        self.mox.VerifyAll()
+
+    def test_keypair_delete(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.keypairs = self.mox.CreateMockAnything()
+        novaclient.keypairs.delete(IsA(int))
+
+        self.mox.ReplayAll()
+
+        ret_val = api.keypair_delete(self.request, self.keypair.id)
+        self.assertIsNone(ret_val)
+
+        self.mox.VerifyAll()
+
+    def test_keypair_list(self):
+        novaclient = self.stub_novaclient()
+
+        novaclient.keypairs = self.mox.CreateMockAnything()
+        novaclient.keypairs.list().AndReturn(self.keypairs)
+
+        self.mox.ReplayAll()
+
+        ret_val = api.keypair_list(self.request)
+
+        self.assertEqual(len(ret_val), len(self.keypairs))
+        for keypair in ret_val:
+            self.assertIsInstance(keypair, api.KeyPair)
+
+        self.mox.VerifyAll()
+
+
 class GlanceApiTests(test.TestCase):
     def stub_glance_api(self, count=1):
         self.mox.StubOutWithMock(api, 'glance_api')
         glance_api = self.mox.CreateMock(glance_client.Client)
+        glance_api.token = TEST_TOKEN
         for i in range(count):
             api.glance_api(IsA(http.HttpRequest)).AndReturn(glance_api)
         return glance_api
 
     def test_get_glance_api(self):
         self.mox.StubOutClassWithMocks(glance_client, 'Client')
-        glance_client.Client(TEST_HOSTNAME, TEST_PORT)
+        client_instance = glance_client.Client(TEST_HOSTNAME, TEST_PORT,
+                                                        auth_tok=TEST_TOKEN)
+        # Normally ``auth_tok`` is set in ``Client.__init__``, but mox doesn't
+        # duplicate that behavior so we set it manually.
+        client_instance.auth_tok = TEST_TOKEN
 
         self.mox.StubOutWithMock(api, 'url_for')
-        api.url_for(IsA(http.HttpRequest), 'glance').AndReturn(TEST_URL)
+        api.url_for(IsA(http.HttpRequest), 'image').AndReturn(TEST_URL)
 
         self.mox.ReplayAll()
 
-        self.assertIsNotNone(api.glance_api(self.request))
+        ret_val = api.glance_api(self.request)
+        self.assertIsNotNone(ret_val)
+        self.assertEqual(ret_val.auth_tok, TEST_TOKEN)
 
         self.mox.VerifyAll()
 

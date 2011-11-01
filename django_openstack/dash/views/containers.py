@@ -4,7 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
-# Copyright 2011 Fourth Paradigm Development, Inc.
+# Copyright 2011 Nebula, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -47,7 +47,7 @@ class DeleteContainer(forms.SelfHandlingForm):
             messages.error(request,
                            'Unable to delete non-empty container: %s' % \
                            data['container_name'])
-            LOG.error('Unable to delete container "%s".  Exception: "%s"' %
+            LOG.exception('Unable to delete container "%s".  Exception: "%s"' %
                       (data['container_name'], str(e)))
         else:
             messages.info(request,
@@ -62,7 +62,7 @@ class CreateContainer(forms.SelfHandlingForm):
     def handle(self, request, data):
         api.swift_create_container(request, data['name'])
         messages.success(request, "Container was successfully created.")
-        return shortcuts.redirect("dash_containers", request.user.tenant)
+        return shortcuts.redirect("dash_containers", request.user.tenant_id)
 
 
 @login_required
@@ -73,7 +73,8 @@ def index(request, tenant_id):
 
     containers = api.swift_get_containers(request)
 
-    return shortcuts.render_to_response('dash_containers.html', {
+    return shortcuts.render_to_response(
+    'django_openstack/dash/containers/index.html', {
         'containers': containers,
         'delete_form': delete_form,
     }, context_instance=template.RequestContext(request))
@@ -85,6 +86,7 @@ def create(request, tenant_id):
     if handled:
         return handled
 
-    return shortcuts.render_to_response('dash_containers_create.html', {
+    return shortcuts.render_to_response(
+    'django_openstack/dash/containers/create.html', {
         'create_form': form,
     }, context_instance=template.RequestContext(request))

@@ -4,7 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
-# Copyright 2011 Fourth Paradigm Development, Inc.
+# Copyright 2011 Nebula, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -74,9 +74,4 @@ urlpatterns += patterns('django_openstack.syspanel.views.tenants',
     url(TENANTS % 'update', 'update', name='syspanel_tenant_update'),
     url(TENANTS % 'users', 'users', name='syspanel_tenant_users'),
     url(TENANTS % 'quotas', 'quotas', name='syspanel_tenant_quotas'),
-)
-
-
-urlpatterns += patterns('django_openstack.syspanel.views.floating_ips',
-    url(r'^floating_ips/$', 'index', name='syspanel_floating_ips'),
 )
