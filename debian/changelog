@@ -1,3 +1,10 @@
+django-openstack (2011.3-final-rcb1) natty; urgency=low
+
+  * import 2011.3-final from github.com/cloudbuilders/openstack-dashboard.git
+    revision 90f51fc78b7a84c1f77deb81f31d5e86a9b6d29c
+
+ -- RCB Builder <rcb-deploy@lists.rackspace.com>  Tue, 01 Nov 2011 10:54:41 -0500
+
 django-openstack (2011.3-d5-rcb4) natty; urgency=low
 
   * Add XCBS-RCB-Component field in preparation for new essex-e0 drops
