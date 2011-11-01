@@ -4,7 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
-# Copyright 2011 Fourth Paradigm Development, Inc.
+# Copyright 2011 Nebula, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -52,8 +52,8 @@ class TerminateInstance(forms.SelfHandlingForm):
         try:
             api.server_delete(request, instance)
         except api_exceptions.ApiException, e:
-            LOG.error('ApiException while terminating instance "%s"' %
-                      instance_id, exc_info=True)
+            LOG.exception('ApiException while terminating instance "%s"' %
+                      instance_id)
             messages.error(request,
                            'Unable to terminate %s: %s' %
                            (instance_id, e.message,))
@@ -74,8 +74,8 @@ class RebootInstance(forms.SelfHandlingForm):
             server = api.server_reboot(request, instance_id)
             messages.success(request, "Instance rebooting")
         except api_exceptions.ApiException, e:
-            LOG.error('ApiException while rebooting instance "%s"' %
-                      instance_id, exc_info=True)
+            LOG.exception('ApiException while rebooting instance "%s"' %
+                      instance_id)
             messages.error(request,
                        'Unable to reboot instance: %s' % e.message)
 
@@ -90,7 +90,7 @@ class RebootInstance(forms.SelfHandlingForm):
 class UpdateInstance(forms.SelfHandlingForm):
     tenant_id = forms.CharField(widget=forms.HiddenInput())
     instance = forms.CharField(widget=forms.TextInput(
-                               attrs={'readonly':'readonly'}))
+                               attrs={'readonly': 'readonly'}))
     name = forms.CharField(required=True)
     description = forms.CharField(required=False)
 
@@ -98,7 +98,10 @@ class UpdateInstance(forms.SelfHandlingForm):
         tenant_id = data['tenant_id']
         description = data.get('description', '')
         try:
-            api.server_update(request, data['instance'], data['name'], description)
+            api.server_update(request,
+                              data['instance'],
+                              data['name'],
+                              description)
             messages.success(request, "Instance '%s' updated" % data['name'])
         except api_exceptions.ApiException, e:
             messages.error(request,
@@ -117,7 +120,7 @@ def index(request, tenant_id):
     try:
         instances = api.server_list(request)
     except api_exceptions.ApiException as e:
-        LOG.error('Exception in instance index', exc_info=True)
+        LOG.exception('Exception in instance index')
         messages.error(request, 'Unable to get instance list: %s' % e.message)
 
     # We don't have any way of showing errors for these, so don't bother
@@ -125,11 +128,13 @@ def index(request, tenant_id):
     terminate_form = TerminateInstance()
     reboot_form = RebootInstance()
 
-    return shortcuts.render_to_response('dash_instances.html', {
+    return shortcuts.render_to_response(
+    'django_openstack/dash/instances/index.html', {
         'instances': instances,
         'terminate_form': terminate_form,
         'reboot_form': reboot_form,
     }, context_instance=template.RequestContext(request))
+
 
 @login_required
 def refresh(request, tenant_id):
@@ -144,11 +149,13 @@ def refresh(request, tenant_id):
     terminate_form = TerminateInstance()
     reboot_form = RebootInstance()
 
-    return shortcuts.render_to_response('_instance_list.html', {
+    return shortcuts.render_to_response(
+    'django_openstack/dash/instances/_instance_list.html', {
         'instances': instances,
         'terminate_form': terminate_form,
         'reboot_form': reboot_form,
     }, context_instance=template.RequestContext(request))
+
 
 @login_required
 def usage(request, tenant_id=None):
@@ -161,12 +168,12 @@ def usage(request, tenant_id=None):
 
     usage = {}
     if not tenant_id:
-        tenant_id = request.user.tenant
+        tenant_id = request.user.tenant_id
 
     try:
         usage = api.usage_get(request, tenant_id, datetime_start, datetime_end)
     except api_exceptions.ApiException, e:
-        LOG.error('ApiException in instance usage', exc_info=True)
+        LOG.exception('ApiException in instance usage')
 
         messages.error(request, 'Unable to get usage info: %s' % e.message)
 
@@ -196,10 +203,10 @@ def usage(request, tenant_id=None):
         instances += terminated_instances
 
     if request.GET.get('format', 'html') == 'csv':
-        template_name = 'dash_usage.csv'
+        template_name = 'django_openstack/dash/instances/usage.csv'
         mimetype = "text/csv"
     else:
-        template_name = 'dash_usage.html'
+        template_name = 'django_openstack/dash/instances/usage.html'
         mimetype = "text/html"
 
     return shortcuts.render_to_response(template_name, {
@@ -212,7 +219,7 @@ def usage(request, tenant_id=None):
         'datetime_start': datetime_start,
         'datetime_end': datetime_end,
         'instances': instances
-    }, context_instance = template.RequestContext(request), mimetype=mimetype)
+    }, context_instance=template.RequestContext(request), mimetype=mimetype)
 
 
 @login_required
@@ -224,9 +231,7 @@ def console(request, tenant_id, instance_id):
         response.flush()
         return response
     except api_exceptions.ApiException, e:
-        LOG.error('ApiException while fetching instance console',
-                  exc_info=True)
-
+        LOG.exception('ApiException while fetching instance console')
         messages.error(request,
                    'Unable to get log for instance %s: %s' %
                    (instance_id, e.message))
@@ -238,11 +243,10 @@ def vnc(request, tenant_id, instance_id):
     try:
         console = api.console_create(request, instance_id, 'vnc')
         instance = api.server_get(request, instance_id)
-        return shortcuts.redirect(console.output + ("&title=%s(%s)" % (instance.name, instance_id)))
+        return shortcuts.redirect(console.output +
+                ("&title=%s(%s)" % (instance.name, instance_id)))
     except api_exceptions.ApiException, e:
-        LOG.error('ApiException while fetching instance vnc connection',
-                  exc_info=True)
-
+        LOG.exception('ApiException while fetching instance vnc connection')
         messages.error(request,
                    'Unable to get vnc console for instance %s: %s' %
                    (instance_id, e.message))
@@ -254,9 +258,7 @@ def update(request, tenant_id, instance_id):
     try:
         instance = api.server_get(request, instance_id)
     except api_exceptions.ApiException, e:
-        LOG.error('ApiException while fetching instance info',
-                  exc_info=True)
-
+        LOG.exception('ApiException while fetching instance info')
         messages.error(request,
                    'Unable to get information for instance %s: %s' %
                    (instance_id, e.message))
@@ -271,7 +273,8 @@ def update(request, tenant_id, instance_id):
     if handled:
         return handled
 
-    return shortcuts.render_to_response('dash_instance_update.html', {
+    return shortcuts.render_to_response(
+    'django_openstack/dash/instances/update.html', {
         'instance': instance,
         'form': form,
     }, context_instance=template.RequestContext(request))

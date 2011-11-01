@@ -4,7 +4,7 @@
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
 #
-# Copyright 2011 Fourth Paradigm Development, Inc.
+# Copyright 2011 Nebula, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -47,8 +47,9 @@ import openstackx.admin
 import openstackx.api.exceptions as api_exceptions
 import openstackx.extras
 import openstackx.auth
+from novaclient.v1_1 import client
+import quantum.client
 from urlparse import urlparse
-
 
 LOG = logging.getLogger('django_openstack.api')
 
@@ -140,7 +141,7 @@ class Image(APIDictWrapper):
     """Simple wrapper around glance image dictionary"""
     _attrs = ['checksum', 'container_format', 'created_at', 'deleted',
              'deleted_at', 'disk_format', 'id', 'is_public', 'location',
-             'name', 'properties', 'size', 'status', 'updated_at']
+             'name', 'properties', 'size', 'status', 'updated_at', 'owner']
 
     def __getattr__(self, attrname):
         if attrname == "properties":
@@ -157,7 +158,7 @@ class ImageProperties(APIDictWrapper):
 
 class KeyPair(APIResourceWrapper):
     """Simple wrapper around openstackx.extras.keypairs.Keypair"""
-    _attrs = ['fingerprint', 'key_name', 'private_key']
+    _attrs = ['fingerprint', 'name', 'private_key']
 
 
 class Server(APIResourceWrapper):
@@ -167,7 +168,7 @@ class Server(APIResourceWrapper):
     """
     _attrs = ['addresses', 'attrs', 'hostId', 'id', 'image', 'links',
              'metadata', 'name', 'private_ip', 'public_ip', 'status', 'uuid',
-             'image_name']
+             'image_name', 'VirtualInterfaces']
 
     def __init__(self, apiresource, request):
         super(Server, self).__init__(apiresource)
@@ -214,12 +215,12 @@ class SwiftObject(APIResourceWrapper):
 
 class Tenant(APIResourceWrapper):
     """Simple wrapper around openstackx.auth.tokens.Tenant"""
-    _attrs = ['id', 'description', 'enabled']
+    _attrs = ['id', 'description', 'enabled', 'name']
 
 
 class Token(APIResourceWrapper):
     """Simple wrapper around openstackx.auth.tokens.Token"""
-    _attrs = ['id', 'serviceCatalog', 'tenant_id', 'username']
+    _attrs = ['id', 'serviceCatalog', 'tenant_id', 'user']
 
 
 class Usage(APIResourceWrapper):
@@ -232,7 +233,12 @@ class Usage(APIResourceWrapper):
 
 class User(APIResourceWrapper):
     """Simple wrapper around openstackx.extras.users.User"""
-    _attrs = ['email', 'enabled', 'id', 'tenantId']
+    _attrs = ['email', 'enabled', 'id', 'tenantId', 'name']
+
+
+class Role(APIResourceWrapper):
+    """Wrapper around user role"""
+    _attrs = ['id', 'name', 'description', 'service_id']
 
 
 class SecurityGroup(APIResourceWrapper):
@@ -262,21 +268,37 @@ class SwiftAuthentication(object):
     def authenticate(self):
         return (self.storage_url, '', self.auth_token)
 
+
 class ServiceCatalogException(api_exceptions.ApiException):
     def __init__(self, service_name):
         message = 'Invalid service catalog service: %s' % service_name
         super(ServiceCatalogException, self).__init__(404, message)
 
-def url_for(request, service_name, admin=False):
+
+class VirtualInterface(APIResourceWrapper):
+    _attrs = ['id', 'mac_address']
+
+
+def get_service_from_catalog(catalog, service_type):
+    for service in catalog:
+        if service['type'] == service_type:
+            return service
+    return None
+
+
+def url_for(request, service_type, admin=False):
     catalog = request.user.service_catalog
-    try:
-        if admin:
-            rv = catalog[service_name][0]['adminURL']
-        else:
-            rv = catalog[service_name][0]['internalURL']
-        return rv
-    except (IndexError, KeyError):
-        raise ServiceCatalogException(service_name)
+    service = get_service_from_catalog(catalog, service_type)
+    if service:
+        try:
+            if admin:
+                return service['endpoints'][0]['adminURL']
+            else:
+                return service['endpoints'][0]['internalURL']
+        except (IndexError, KeyError):
+            raise ServiceCatalogException(service_type)
+    else:
+        raise ServiceCatalogException(service_type)
 
 
 def check_openstackx(f):
@@ -296,8 +318,10 @@ def check_openstackx(f):
             return f(*args, **kwargs)
         except api_exceptions.NotFound, e:
             e.message = e.details or ''
-            e.message += ' This error may be caused by missing openstackx' \
-                         ' extensions in nova. See the dashboard README.'
+            e.message += ' This error may be caused by a misconfigured' \
+                         ' nova url in keystone\'s service catalog, or ' \
+                         ' by missing openstackx extensions in nova. ' \
+                         ' See the dashboard README.'
             raise
 
     return inner
@@ -306,19 +330,18 @@ def check_openstackx(f):
 def compute_api(request):
     compute = openstack.compute.Compute(
         auth_token=request.user.token,
-        management_url=url_for(request, 'nova'))
+        management_url=url_for(request, 'compute'))
     # this below hack is necessary to make the jacobian compute client work
     # TODO(mgius): It looks like this is unused now?
     compute.client.auth_token = request.user.token
-    compute.client.management_url = url_for(request, 'nova')
+    compute.client.management_url = url_for(request, 'compute')
     LOG.debug('compute_api connection created using token "%s"'
                       ' and url "%s"' %
-                      (request.user.token, url_for(request, 'nova')))
+                      (request.user.token, url_for(request, 'compute')))
     return compute
 
 
 def account_api(request):
-    LOG.error(dir(request))
     LOG.debug('account_api connection created using token "%s"'
                       ' and url "%s"' %
                   (request.user.token,
@@ -329,26 +352,38 @@ def account_api(request):
 
 
 def glance_api(request):
-    o = urlparse(url_for(request, 'glance'))
+    o = urlparse(url_for(request, 'image'))
     LOG.debug('glance_api connection created for host "%s:%d"' %
                      (o.hostname, o.port))
-    return glance.client.Client(o.hostname, o.port)
+    return glance.client.Client(o.hostname, o.port, auth_tok=request.user.token)
 
 
 def admin_api(request):
     LOG.debug('admin_api connection created using token "%s"'
                     ' and url "%s"' %
-                    (request.user.token, url_for(request, 'nova', True)))
+                    (request.user.token, url_for(request, 'compute', True)))
     return openstackx.admin.Admin(auth_token=request.user.token,
-                                 management_url=url_for(request, 'nova', True))
+                                 management_url=url_for(request, 'compute', True))
 
 
 def extras_api(request):
     LOG.debug('extras_api connection created using token "%s"'
                      ' and url "%s"' %
-                    (request.user.token, url_for(request, 'nova')))
+                    (request.user.token, url_for(request, 'compute')))
     return openstackx.extras.Extras(auth_token=request.user.token,
-                                   management_url=url_for(request, 'nova'))
+                                   management_url=url_for(request, 'compute'))
+
+
+def novaclient(request):
+    LOG.debug('novaclient connection created using token "%s"'
+              ' and url "%s"' % (request.user.token, url_for(request, 'compute')))
+    c = client.Client(username=request.user.username,
+                      api_key=request.user.token,
+                      project_id=request.user.tenant_id,
+                      auth_url=url_for(request, 'compute'))
+    c.client.auth_token = request.user.token
+    c.client.management_url=url_for(request, 'compute')
+    return c
 
 
 def auth_api():
@@ -361,10 +396,21 @@ def auth_api():
 def swift_api(request):
     LOG.debug('object store connection created using token "%s"'
                 ' and url "%s"' %
-                (request.session['token'], url_for(request, 'swift')))
-    auth = SwiftAuthentication(url_for(request, 'swift'),
+                (request.session['token'], url_for(request, 'object-store')))
+    auth = SwiftAuthentication(url_for(request, 'object-store'),
                                request.session['token'])
     return cloudfiles.get_connection(auth=auth)
+
+
+def quantum_api(request):
+    tenant = None
+    if hasattr(request, 'user'):
+        tenant = request.user.tenant_id
+    else:
+        tenant = settings.QUANTUM_TENANT
+
+    return quantum.client.Client(settings.QUANTUM_URL, settings.QUANTUM_PORT,
+                  False, tenant, 'json')
 
 
 def console_create(request, instance_id, kind='text'):
@@ -372,105 +418,50 @@ def console_create(request, instance_id, kind='text'):
 
 
 def flavor_create(request, name, memory, vcpu, disk, flavor_id):
+    # TODO -- convert to novaclient when novaclient adds create support
     return Flavor(admin_api(request).flavors.create(
             name, int(memory), int(vcpu), int(disk), flavor_id))
 
 
 def flavor_delete(request, flavor_id, purge=False):
+    # TODO -- convert to novaclient when novaclient adds delete support
     admin_api(request).flavors.delete(flavor_id, purge)
 
 
 def flavor_get(request, flavor_id):
-    return Flavor(compute_api(request).flavors.get(flavor_id))
+    return Flavor(novaclient(request).flavors.get(flavor_id))
 
 
-@check_openstackx
+def flavor_list(request):
+    return [Flavor(f) for f in novaclient(request).flavors.list()]
+
+
 def tenant_floating_ip_list(request):
     """
     Fetches a list of all floating ips.
     """
-    return [FloatingIp(ip) for ip in extras_api(request).floating_ips.list()]
+    return [FloatingIp(ip) for ip in novaclient(request).floating_ips.list()]
+
 
 def tenant_floating_ip_get(request, floating_ip_id):
     """
     Fetches a floating ip.
     """
-    return extras_api(request).floating_ips.get(floating_ip_id)
+    return novaclient(request).floating_ips.get(floating_ip_id)
 
 
-def tenant_floating_ip_attach(request, tenant_id):
+def tenant_floating_ip_allocate(request):
     """
     Allocates a floating ip to tenant.
     """
-    return extras_api(request).floating_ips.attach()
+    return novaclient(request).floating_ips.create()
 
 
 def tenant_floating_ip_release(request, floating_ip_id):
     """
     Releases floating ip from the pool of a tenant.
     """
-    return extras_api(request).floating_ips.release(floating_ip_id)
-
-
-def tenant_floating_ip_associate(request, floating_ip_id, instance_id):
-    """
-    Associates a floating ip to a fixed ip.
-    """
-    return extras_api(request).floating_ips.associate(floating_ip_id, instance_id)
-
-
-def tenant_floating_ip_disassociate(request, floating_ip_id):
-    """
-    Removes relationship between floating and fixed ips.
-    """
-    return extras_api(request).floating_ips.disassociate(floating_ip_id)
-
-
-@check_openstackx
-def admin_floating_ip_list(request):
-    """
-    Fetches a list of all floating ips.
-    """
-    return [FloatingIp(ip) for ip in admin_api(request).floating_ips.list()]
-
-def admin_floating_ip_get(request, floating_ip_id):
-    """
-    Fetches a floating ip.
-    """
-    return admin_api(request).floating_ips.get(floating_ip_id)
-
-
-def admin_floating_ip_attach(request, tenant_id):
-    """
-    Allocates a floating ip to tenant.
-    """
-    return admin_api(request).floating_ips.attach()
-
-
-def admin_floating_ip_release(request, floating_ip_id):
-    """
-    Releases floating ip from the pool of a tenant.
-    """
-    return admin_api(request).floating_ips.release(floating_ip_id)
-
-
-def admin_floating_ip_associate(request, floating_ip_id, instance_id):
-    """
-    Associates a floating ip to a fixed ip.
-    """
-    return admin_api(request).floating_ips.associate(floating_ip_id, instance_id)
-
-
-def admin_floating_ip_disassociate(request, floating_ip_id):
-    """
-    Removes relationship between floating and fixed ips.
-    """
-    return admin_api(request).floating_ips.disassociate(floating_ip_id)
-
-
-@check_openstackx
-def flavor_list(request):
-    return [Flavor(f) for f in extras_api(request).flavors.list()]
+    return novaclient(request).floating_ips.delete(floating_ip_id)
 
 
 def image_create(request, image_meta, image_file):
@@ -496,8 +487,9 @@ def snapshot_list_detailed(request):
     return [Image(i) for i in glance_api(request)
                              .get_images_detailed(filters=filters)]
 
+
 def snapshot_create(request, instance_id, name):
-    return extras_api(request).snapshots.create(instance_id, name)
+    return novaclient(request).servers.create_image(instance_id, name)
 
 
 def image_update(request, image_id, image_meta=None):
@@ -507,23 +499,27 @@ def image_update(request, image_id, image_meta=None):
 
 
 def keypair_create(request, name):
-    return KeyPair(extras_api(request).keypairs.create(name))
+    return KeyPair(novaclient(request).keypairs.create(name))
+
+
+def keypair_import(request, name, public_key):
+    return KeyPair(novaclient(request).keypairs.create(name, public_key))
 
 
 def keypair_delete(request, keypair_id):
-    extras_api(request).keypairs.delete(keypair_id)
+    novaclient(request).keypairs.delete(keypair_id)
 
 
-@check_openstackx
 def keypair_list(request):
-    return [KeyPair(key) for key in extras_api(request).keypairs.list()]
+    return [KeyPair(key) for key in novaclient(request).keypairs.list()]
 
 
 def server_create(request, name, image, flavor,
                            key_name, user_data, security_groups):
-    return Server(extras_api(request).servers.create(
-            name, image, flavor, key_name=key_name, user_data=user_data,
-            security_groups=security_groups), request)
+    return Server(novaclient(request).servers.create(
+            name, image, flavor, userdata=user_data,
+            security_groups=security_groups,
+            key_name=key_name), request)
 
 
 def server_delete(request, instance):
@@ -557,6 +553,26 @@ def server_update(request, instance_id, name, description):
                                               description=description)
 
 
+def server_add_floating_ip(request, server, address):
+    """
+    Associates floating IP to server's fixed IP.
+    """
+    server = novaclient(request).servers.get(server)
+    fip = novaclient(request).floating_ips.get(address)
+
+    return novaclient(request).servers.add_floating_ip(server, fip)
+
+
+def server_remove_floating_ip(request, server, address):
+    """
+    Removes relationship between floating and server's fixed ip.
+    """
+    fip = novaclient(request).floating_ips.get(address)
+    server = novaclient(request).servers.get(fip.instance_id)
+
+    return novaclient(request).servers.remove_floating_ip(server, fip)
+
+
 def service_get(request, name):
     return Services(admin_api(request).services.get(name))
 
@@ -583,8 +599,8 @@ def token_list_tenants(request, token):
     return [Tenant(t) for t in auth_api().tenants.for_token(token)]
 
 
-def tenant_create(request, tenant_id, description, enabled):
-    return Tenant(account_api(request).tenants.create(tenant_id,
+def tenant_create(request, tenant_name, description, enabled):
+    return Tenant(account_api(request).tenants.create(tenant_name,
                                                       description,
                                                       enabled))
 
@@ -593,13 +609,32 @@ def tenant_get(request, tenant_id):
     return Tenant(account_api(request).tenants.get(tenant_id))
 
 
+def tenant_delete(request, tenant_id):
+    account_api(request).tenants.delete(tenant_id)
+
+
 @check_openstackx
 def tenant_list(request):
     return [Tenant(t) for t in account_api(request).tenants.list()]
 
 
-def tenant_update(request, tenant_id, description, enabled):
+def tenant_list_for_token(request, token):
+    # FIXME: use novaclient for this
+    keystone =  openstackx.auth.Auth(
+            management_url=settings.OPENSTACK_KEYSTONE_URL)
+    return [Tenant(t) for t in keystone.tenants.for_token(token)]
+
+
+def users_list_for_token_and_tenant(request, token, tenant):
+    admin_account =  openstackx.extras.Account(
+                     auth_token=token,
+                     management_url=settings.OPENSTACK_KEYSTONE_ADMIN_URL)
+    return [User(u) for u in admin_account.users.get_for_tenant(tenant)]
+
+
+def tenant_update(request, tenant_id, tenant_name, description, enabled):
     return Tenant(account_api(request).tenants.update(tenant_id,
+                                                      tenant_name,
                                                       description,
                                                       enabled))
 
@@ -608,33 +643,12 @@ def token_create(request, tenant, username, password):
     return Token(auth_api().tokens.create(tenant, username, password))
 
 
+def token_create_scoped_with_token(request, tenant, token):
+    return Token(auth_api().tokens.create_scoped_with_token(tenant, token))
+
+
 def tenant_quota_get(request, tenant):
-    return admin_api(request).quota_sets.get(tenant)
-
-
-def token_info(request, token):
-    # TODO(mgius): This function doesn't make a whole lot of sense to me.  The
-    # information being gathered here really aught to be attached to Token() as
-    # part of token_create.  May require modification of openstackx so that the
-    # token_create call returns this information as well
-    hdrs = {"Content-type": "application/json",
-            "X_AUTH_TOKEN": settings.OPENSTACK_ADMIN_TOKEN,
-            "Accept": "text/json"}
-
-    o = urlparse(token.serviceCatalog['identity'][0]['adminURL'])
-    conn = httplib.HTTPConnection(o.hostname, o.port)
-    conn.request("GET", "/v2.0/tokens/%s" % token.id, headers=hdrs)
-    response = conn.getresponse()
-    data = json.loads(response.read())
-
-    admin = False
-    for role in data['auth']['user']['roleRefs']:
-        if role['roleId'] == 'Admin':
-            admin = True
-
-    return {'tenant': data['auth']['user']['tenantId'],
-            'user': data['auth']['user']['username'],
-            'admin': admin}
+    return novaclient(request).quotas.get(tenant)
 
 
 @check_openstackx
@@ -661,28 +675,26 @@ def user_get(request, user_id):
 
 
 def security_group_list(request):
-    return [SecurityGroup(g)for g in extras_api(request).\
+    return [SecurityGroup(g) for g in novaclient(request).\
                                      security_groups.list()]
 
 def security_group_get(request, security_group_id):
-    return SecurityGroup(extras_api(request).\
+    return SecurityGroup(novaclient(request).\
                          security_groups.get(security_group_id))
 
 def security_group_create(request, name, description):
-    return SecurityGroup(extras_api(request).\
+    return SecurityGroup(novaclient(request).\
                          security_groups.create(name, description))
 
 
 def security_group_delete(request, security_group_id):
-    extras_api(request).security_groups.delete(security_group_id)
+    novaclient(request).security_groups.delete(security_group_id)
 
 
 def security_group_rule_create(request, parent_group_id, ip_protocol=None,
-                                                         from_port=None,
-                                                         to_port=None,
-                                                         cidr=None,
-                                                         group_id=None):
-    return SecurityGroup(extras_api(request).\
+                               from_port=None, to_port=None, cidr=None,
+                               group_id=None):
+    return SecurityGroup(novaclient(request).\
                          security_group_rules.create(parent_group_id,
                                                      ip_protocol,
                                                      from_port,
@@ -692,7 +704,7 @@ def security_group_rule_create(request, parent_group_id, ip_protocol=None,
 
 
 def security_group_rule_delete(request, security_group_rule_id):
-    extras_api(request).security_group_rules.delete(security_group_rule_id)
+    novaclient(request).security_group_rules.delete(security_group_rule_id)
 
 
 @check_openstackx
@@ -714,6 +726,31 @@ def user_update_password(request, user_id, password):
 
 def user_update_tenant(request, user_id, tenant_id):
     return User(account_api(request).users.update_tenant(user_id, tenant_id))
+
+
+def _get_role(request, name):
+    roles = account_api(request).roles.list()
+    for role in roles:
+        if role.name.lower() == name.lower():
+           return role
+
+    raise Exception('Role does not exist: %s' % name)
+
+
+def role_add_for_tenant_user(request, tenant_id, user_id, role_name):
+    role = _get_role(request, role_name)
+    account_api(request).role_refs.add_for_tenant_user(
+                tenant_id,
+                user_id,
+                role.id)
+
+
+def role_delete_for_tenant_user(request, tenant_id, user_id, role_name):
+    role = _get_role(request, role_name)
+    account_api(request).role_refs.delete_for_tenant_user(
+                tenant_id,
+                user_id,
+                role.id)
 
 
 def swift_container_exists(request, container_name):
@@ -784,6 +821,99 @@ def swift_get_object_data(request, container_name, object_name):
     container = swift_api(request).get_container(container_name)
     return container.get_object(object_name).stream()
 
+
+def quantum_list_networks(request):
+    return quantum_api(request).list_networks()
+
+
+def quantum_network_details(request, network_id):
+    return quantum_api(request).show_network_details(network_id)
+
+
+def quantum_list_ports(request, network_id):
+    return quantum_api(request).list_ports(network_id)
+
+
+def quantum_port_details(request, network_id, port_id):
+    return quantum_api(request).show_port_details(network_id, port_id)
+
+
+def quantum_create_network(request, data):
+    return quantum_api(request).create_network(data)
+
+
+def quantum_delete_network(request, network_id):
+    return quantum_api(request).delete_network(network_id)
+
+
+def quantum_update_network(request, network_id, data):
+    return quantum_api(request).update_network(network_id, data)
+
+
+def quantum_create_port(request, network_id):
+    return quantum_api(request).create_port(network_id)
+
+
+def quantum_delete_port(request, network_id, port_id):
+    return quantum_api(request).delete_port(network_id, port_id)
+
+
+def quantum_attach_port(request, network_id, port_id, data):
+    return quantum_api(request).attach_resource(network_id, port_id, data)
+
+
+def quantum_detach_port(request, network_id, port_id):
+    return quantum_api(request).detach_resource(network_id, port_id)
+
+
+def quantum_set_port_state(request, network_id, port_id, data):
+    return quantum_api(request).set_port_state(network_id, port_id, data)
+
+
+def quantum_port_attachment(request, network_id, port_id):
+    return quantum_api(request).show_port_attachment(network_id, port_id)
+
+
+def get_vif_ids(request):
+    vifs = []
+    attached_vifs = []
+    # Get a list of all networks
+    networks_list = quantum_api(request).list_networks()
+    for network in networks_list['networks']:
+        ports = quantum_api(request).list_ports(network['id'])
+        # Get port attachments
+        for port in ports['ports']:
+            port_attachment = quantum_api(request).show_port_attachment(
+                                                    network['id'],
+                                                    port['id'])
+            if port_attachment['attachment']:
+                attached_vifs.append(
+                    port_attachment['attachment']['id'].encode('ascii'))
+    # Get all instances
+    instances = server_list(request)
+    # Get virtual interface ids by instance
+    for instance in instances:
+        id = instance.id
+        instance_vifs = extras_api(request).virtual_interfaces.list(id)
+        for vif in instance_vifs:
+            # Check if this VIF is already connected to any port
+            if str(vif.id) in attached_vifs:
+                vifs.append({
+                    'id': vif.id,
+                    'instance': instance.id,
+                    'instance_name': instance.name,
+                    'available': False
+                })
+            else:
+                vifs.append({
+                    'id': vif.id,
+                    'instance': instance.id,
+                    'instance_name': instance.name,
+                    'available': True
+                })
+    return vifs
+
+
 class GlobalSummary(object):
     node_resources = ['vcpus', 'disk_size', 'ram_size']
     unit_mem_size = {'disk_size': ['GiB', 'TiB'], 'ram_size': ['MiB', 'GiB']}
@@ -803,36 +933,44 @@ class GlobalSummary(object):
             self.service_list = service_list(self.request)
         except api_exceptions.ApiException, e:
             self.service_list = []
-            LOG.error('ApiException fetching service list in instance usage',
-                      exc_info=True)
+            LOG.exception('ApiException fetching service list in instance usage')
             messages.error(self.request,
                            'Unable to get service info: %s' % e.message)
             return
 
         for service in self.service_list:
             if service.type == 'nova-compute':
-                self.summary['total_vcpus'] += min(service.stats['max_vcpus'], service.stats.get('vcpus', 0))
-                self.summary['total_disk_size'] += min(service.stats['max_gigabytes'], service.stats.get('local_gb', 0))
-                self.summary['total_ram_size'] += min(service.stats['max_ram'], service.stats['memory_mb']) if 'max_ram' in service.stats else service.stats.get('memory_mb', 0)
+                self.summary['total_vcpus'] += min(service.stats['max_vcpus'],
+                        service.stats.get('vcpus', 0))
+                self.summary['total_disk_size'] += min(
+                        service.stats['max_gigabytes'],
+                        service.stats.get('local_gb', 0))
+                self.summary['total_ram_size'] += min(
+                        service.stats['max_ram'],
+                        service.stats['memory_mb']) if 'max_ram' \
+                                in service.stats \
+                                else service.stats.get('memory_mb', 0)
 
     def usage(self, datetime_start, datetime_end):
         try:
-            self.usage_list = usage_list(self.request, datetime_start, datetime_end)
+            self.usage_list = usage_list(self.request, datetime_start,
+                    datetime_end)
         except api_exceptions.ApiException, e:
             self.usage_list = []
-            LOG.error('ApiException fetching usage list in instance usage'
+            LOG.exception('ApiException fetching usage list in instance usage'
                       ' on date range "%s to %s"' % (datetime_start,
-                                                     datetime_end),
-                      exc_info=True)
-            messages.error(self.request, 'Unable to get usage info: %s' % e.message)
+                                                     datetime_end))
+            messages.error(self.request,
+                    'Unable to get usage info: %s' % e.message)
             return
 
         for usage in self.usage_list:
-            # FIXME: api needs a simpler dict interface (with iteration) - anthony
-            # NOTE(mgius): Changed this on the api end.  Not too much neater, but
-            # at least its not going into private member data of an external
-            # class anymore
-            #usage = usage._info
+            # FIXME: api needs a simpler dict interface (with iteration)
+            # - anthony
+            # NOTE(mgius): Changed this on the api end.  Not too much
+            # neater, but at least its not going into private member
+            # data of an external class anymore
+            # usage = usage._info
             for k in usage._attrs:
                 v = usage.__getattr__(k)
                 if type(v) in [float, int]:
@@ -849,8 +987,11 @@ class GlobalSummary(object):
             mult = 1.0
 
         for kind in GlobalSummary.node_resource_info:
-            self.summary['total_' + kind + rsrc + '_hr'] = self.summary['total_' + kind + rsrc] / mult
+            self.summary['total_' + kind + rsrc + '_hr'] = \
+                    self.summary['total_' + kind + rsrc] / mult
 
     def avail(self):
         for rsrc in GlobalSummary.node_resources:
-            self.summary['total_avail_' + rsrc] = self.summary['total_' + rsrc] - self.summary['total_active_' + rsrc]
+            self.summary['total_avail_' + rsrc] = \
+                    self.summary['total_' + rsrc] - \
+                    self.summary['total_active_' + rsrc]
