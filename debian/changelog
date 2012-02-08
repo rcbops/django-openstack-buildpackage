@@ -1,3 +1,9 @@
+django-openstack (2012.1-0.e2~rcb1) natty; urgency=low
+
+  * Bump for e2
+
+ -- RCB Builder <rcb-deploy@lists.rackspace.com>  Wed, 08 Feb 2012 08:50:47 -0600
+
 django-openstack (2011.3-final-rcb1) natty; urgency=low
 
   * import 2011.3-final from github.com/cloudbuilders/openstack-dashboard.git
