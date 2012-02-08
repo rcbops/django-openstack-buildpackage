@@ -1,4 +1,4 @@
-django-openstack (2012.1-0.e2~rcb1) natty; urgency=low
+django-openstack (2012.0+e3-rcb1) natty; urgency=low
 
   * Bump for e2
 
